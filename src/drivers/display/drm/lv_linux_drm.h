@@ -70,8 +70,11 @@ void lv_linux_drm_set_file(lv_display_t * disp, const char * file, int64_t conne
 /**
  * @brief Automatically find a suitable DRM device path
  *
- * Scans the system for available DRM devices and returns the path to a suitable
- * device file that can be used with lv_linux_drm_set_file().
+ * Scans the available DRM devices and ranks them by suitability for scanout:
+ * the device must support dumb buffers and expose KMS connectors; a device
+ * with a connected connector is preferred and a connected DSI/DPI panel wins
+ * over everything else. Useful on boards where the /dev/dri/cardN numbering
+ * changes between boots (e.g. Raspberry Pi 5).
  *
  * @return Dynamically allocated string containing the device path (must be freed with lv_free()),
  *         or NULL if no suitable device is found

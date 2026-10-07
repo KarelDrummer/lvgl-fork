@@ -11,18 +11,23 @@
 
 #if LV_USE_LINUX_DRM
 
-#include <dirent.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <xf86drm.h>
 #include <xf86drmMode.h>
 
 #include "lv_linux_drm.h"
 #include "../../../stdlib/lv_sprintf.h"
+#include "../../../stdlib/lv_string.h"
+#include "../../../stdlib/lv_mem.h"
+#include "../../../misc/lv_log.h"
 
 /*********************
  *      DEFINES
  *********************/
 
-#define LV_DRM_CLASS_DIR "/sys/class/drm"
 #define LV_DRM_CARD_PATH "/dev/dri/card"
+#define LV_DRM_MAX_CARDS 8
 
 /**********************
  *      TYPEDEFS
@@ -32,7 +37,8 @@
  *  STATIC PROTOTYPES
  **********************/
 
-static char * find_by_class(void);
+static int rank_card(const char * path);
+static char * find_best_card(void);
 
 /**********************
  *  STATIC VARIABLES
@@ -48,49 +54,103 @@ static char * find_by_class(void);
 
 char * lv_linux_drm_find_device_path(void)
 {
-    return find_by_class();
+    return find_best_card();
 }
 
 /**********************
  *   STATIC FUNCTIONS
  **********************/
 
-static char * find_by_class(void)
+/**
+ * Rank a DRM card node by its suitability for scanout
+ *
+ * On boards with several DRM devices (e.g. Pi 5: v3d render only, vc4 HDMI,
+ * rp1 DSI/DPI) the /dev/dri/cardN order changes between boots, so the right
+ * device must be detected instead of taking the first one.
+ *
+ * @return 0 unusable, 1 KMS with dumb buffers, 2 + connected connector,
+ *         3 + the connector is a DSI/DPI panel
+ */
+static int rank_card(const char * path)
 {
-    DIR * d = opendir(LV_DRM_CLASS_DIR);
-    if(!d) {
+    int fd;
+    int i;
+    int rank;
+    uint64_t has_dumb;
+    drmModeRes * res;
+    drmModeConnector * conn;
+
+    fd = open(path, O_RDWR | O_CLOEXEC);
+    if(fd < 0) {
+        return 0;
+    }
+
+    has_dumb = 0;
+    if(drmGetCap(fd, DRM_CAP_DUMB_BUFFER, &has_dumb) != 0 || !has_dumb) {
+        close(fd);
+        return 0;
+    }
+
+    res = drmModeGetResources(fd);
+    if(res == NULL || res->count_connectors <= 0) {
+        if(res != NULL) {
+            drmModeFreeResources(res);
+        }
+        close(fd);
+        return 0;
+    }
+
+    rank = 1;
+    for(i = 0; i < res->count_connectors; i++) {
+        conn = drmModeGetConnector(fd, res->connectors[i]);
+        if(conn == NULL) {
+            continue;
+        }
+
+        if(conn->connection == DRM_MODE_CONNECTED) {
+            if(conn->connector_type == DRM_MODE_CONNECTOR_DSI ||
+               conn->connector_type == DRM_MODE_CONNECTOR_DPI) {
+                rank = 3;
+            }
+            else if(rank < 2) {
+                rank = 2;
+            }
+        }
+
+        drmModeFreeConnector(conn);
+    }
+
+    drmModeFreeResources(res);
+    close(fd);
+
+    return rank;
+}
+
+static char * find_best_card(void)
+{
+    char path[32];
+    char best_path[32];
+    int card;
+    int rank;
+    int best_rank = 0;
+
+    for(card = 0; card < LV_DRM_MAX_CARDS; card++) {
+        lv_snprintf(path, sizeof(path), LV_DRM_CARD_PATH "%d", card);
+
+        rank = rank_card(path);
+        if(rank > best_rank) {
+            best_rank = rank;
+            lv_strcpy(best_path, path);
+        }
+    }
+
+    if(best_rank == 0) {
+        LV_LOG_WARN("No usable DRM/KMS device found");
         return NULL;
     }
 
-    struct dirent * ent;
-    while((ent = readdir(d)) != NULL) {
-        if(lv_strcmp(ent->d_name, ".") == 0 || lv_strcmp(ent->d_name, "..") == 0) {
-            continue;
-        }
-        /* connector dirs look like card0-HDMI-A-1, card0-eDP-1, etc. */
-        bool is_card = lv_strncmp(ent->d_name, "card", 4) == 0;
-        bool is_connected = lv_strchr(ent->d_name, '-') != NULL;
-
-        if(!is_card || !is_connected) {
-            continue;
-        }
-
-        const size_t buf_size = lv_strlen(LV_DRM_CARD_PATH) + 3;
-        char * card_path = lv_zalloc(buf_size);
-        if(ent->d_name[5] != '-') {
-            /* Double digit card*/
-            lv_snprintf(card_path, buf_size, LV_DRM_CARD_PATH "%c%c", ent->d_name[4], ent->d_name[5]);
-        }
-        else {
-            lv_snprintf(card_path, buf_size, LV_DRM_CARD_PATH "%c", ent->d_name[4]);
-        }
-        closedir(d);
-        return card_path;
-    }
-
-    closedir(d);
-    return NULL;
-
+    LV_LOG_USER("Using DRM card %s (rank %d)", best_path, best_rank);
+    return lv_strdup(best_path);
 }
 
 int32_t lv_linux_drm_mode_get_horizontal_resolution(const lv_linux_drm_mode_t * mode)

@@ -1412,6 +1412,15 @@ static void call_flush_cb(lv_display_t * disp, const lv_area_t * area, uint8_t *
         .y2 = area->y2 + disp->offset_y
     };
 
+	/*
+	lv_area_t offset_area = {
+        .x1 = 0,
+        .y1 = 0,
+        .x2 = 799,
+        .y2 = 479
+    };
+	*/
+
     lv_display_send_event(disp, LV_EVENT_FLUSH_START, &offset_area);
 
     /*For backward compatibility support LV_COLOR_16_SWAP (from v8)*/

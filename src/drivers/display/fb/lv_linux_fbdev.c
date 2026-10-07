@@ -261,8 +261,13 @@ static void write_to_fb(lv_linux_fb_t * dsc, uint32_t fb_pos, const void * data,
     uint8_t * fbp = (uint8_t *)dsc->fbp;
     lv_memcpy(&fbp[fb_pos], data, sz);
 #else
-    if(pwrite(dsc->fbfd, data, sz, fb_pos) < 0)
-        LV_LOG_ERROR("write failed: %d", errno);
+	lseek(dsc->fbfd, fb_pos, SEEK_SET);
+	write(dsc->fbfd, data, sz);
+	/*
+	if(pwrite(dsc->fbfd, data, sz, fb_pos) < 0)
+		printf("HOVNO\n");
+	*/
+	//LV_LOG_ERROR("write failed: %d", errno);
 #endif
 }
 
